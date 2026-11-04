@@ -1,10 +1,11 @@
+
 # 카톡 알림 배드애플
 
 PC 카톡 알림창 하나를 픽셀 하나로 써서 배드애플을 재생하는, 정말 쓸모없는 시뮬레이터.
 
-<video src="recording.webm" controls muted width="100%"></video>
+[recording.webm](https://github.com/user-attachments/assets/5f541685-92c6-44ac-88c3-43d29c469c20)
 
-[recording.webm](recording.webm) — 가로 알림 10개, 임계값 128, 처음 15초
+[recording.webm](recording.webm) — 예시: 가로 알림 10개, 임계값 128
 
 ## 준비물
 
