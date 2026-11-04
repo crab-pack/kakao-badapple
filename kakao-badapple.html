@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>카톡 알림 배드애플</title>
+<style>
+  body { margin: 0; background: #111; color: #ddd; font: 14px/1.5 "Malgun Gothic", sans-serif; }
+  header { padding: 12px 16px; display: flex; flex-wrap: wrap; gap: 14px; align-items: center; background: #1b1b1b; }
+  label { display: flex; align-items: center; gap: 6px; }
+  button, input[type=file] { font: inherit; }
+  #wrap { display: flex; justify-content: center; padding: 16px; }
+  canvas { background: #000; max-width: 100%; }
+  small { color: #888; }
+</style>
+</head>
+<body>
+<header>
+  <label>재생 <select id="src"><option value="demo">KAKAO 데모</option><option value="badapple">배드애플</option></select></label>
+  <label>영상 <input type="file" id="file" accept="video/*"></label>
+  <label>배경 <input type="file" id="bgfile" accept="image/*"></label>
+  <label>가로 알림 수 <input type="range" id="cols" min="8" max="64" value="32"><span id="colsV">32</span></label>
+  <label>임계값 <input type="range" id="thr" min="10" max="245" value="128"><span id="thrV">128</span></label>
+  <label><input type="checkbox" id="inv"> 반전</label>
+  <label><input type="checkbox" id="detail" checked> 카톡 카드 모양</label>
+  <button id="play">일시정지</button>
+  <button id="sound">소리 켜기</button>
+  <button id="reload">알림 내용 다시 읽기</button>
+  <small id="info"></small>
+</header>
+<div id="wrap"><canvas id="out" width="1920" height="1080"></canvas></div>
+
+<script>
+const $ = id => document.getElementById(id);
+const out = $('out'), ctx = out.getContext('2d');
+const W = 1920, H = 1080;
+const TASKBAR_TOP = 1024;   // win10.png 작업표시줄 시작 y. 알림은 이 위에만 뜬다.
+const video = document.createElement('video');
+video.loop = true; video.playsInline = true;
+const small = document.createElement('canvas');
+const sctx = small.getContext('2d', { willReadFrequently: true });
+
+let hasVideo = false, playing = true, rows = 41, cols = 32;
+
+// 기본으로 보여줄 데모 (움직이는 원 + KAKAO 글자). 작업표시줄 위 영역과 같은 비율.
+const demo = document.createElement('canvas');
+demo.width = 960; demo.height = 512;
+const dctx = demo.getContext('2d');
+function drawDemo(t) {
+  dctx.fillStyle = '#000'; dctx.fillRect(0, 0, 960, 512);
+  dctx.fillStyle = '#fff';
+  dctx.beginPath();
+  dctx.arc(480 + Math.cos(t / 700) * 330, 256 + Math.sin(t / 500) * 150, 80, 0, 7);
+  dctx.fill();
+  dctx.font = 'bold 130px sans-serif'; dctx.textAlign = 'center';
+  dctx.fillStyle = '#888'; dctx.fillText('KAKAO', 480, 300);
+}
+
+function loadVideo(src) {
+  video.src = src;
+  video.onloadedmetadata = () => {
+    hasVideo = true;
+    // 소리 있는 자동재생이 막히면 음소거로 재생
+    video.muted = false;
+    video.play().catch(() => { video.muted = true; video.play(); updateSound(); });
+    updateSound();
+  };
+}
+function useDemo() { hasVideo = false; video.pause(); video.removeAttribute('src'); video.load(); }
+
+$('src').onchange = e => e.target.value === 'badapple' ? loadVideo('bad-apple.mp4') : useDemo();
+$('file').onchange = e => {
+  const f = e.target.files[0];
+  if (f) loadVideo(URL.createObjectURL(f));
+};
+$('play').onclick = () => {
+  playing = !playing;
+  $('play').textContent = playing ? '일시정지' : '재생';
+  if (hasVideo) playing ? video.play() : video.pause();
+};
+function updateSound() { $('sound').textContent = video.muted ? '소리 켜기' : '소리 끄기'; }
+$('sound').onclick = () => { video.muted = !video.muted; updateSound(); };
+
+// 바탕화면 (작업표시줄 포함 1920x1080 스크린샷)
+const bg = new Image();
+bg.src = 'win10.png';
+$('bgfile').onchange = e => {
+  const f = e.target.files[0];
+  if (f) bg.src = URL.createObjectURL(f);
+};
+
+// 알림 내용: notifications.json (칸마다 목록을 순서대로 돌려 씀)
+let config = { inputPlaceholder: '메시지 입력', sendLabel: '전송', notifications: [{ room: '', name: '', message: '' }] };
+async function loadConfig() {
+  try {
+    const c = await (await fetch('notifications.json', { cache: 'no-store' })).json();
+    if (!c.notifications || !c.notifications.length) throw new Error('notifications 목록이 비어 있음');
+    config = { ...config, ...c };
+  } catch (e) { alert('notifications.json 읽기 실패: ' + e.message); }
+}
+loadConfig();
+$('reload').onclick = loadConfig;
+
+// 실제 카톡 PC 알림 비율(약 300×126). 세로 길이 h 기준으로 배치.
+const CARD_AR = 2.4;
+const FONT = '"Malgun Gothic", sans-serif';
+function drawCard(x, y, w, h, n) {
+  const bar = (fx, fy, fw, fh, c) => {
+    ctx.fillStyle = c;
+    ctx.fillRect(x + fx * h, y + fy * h, fw * h, Math.max(1, fh * h));
+  };
+  // 카드가 작으면 글자 대신 막대로 표시
+  const text = (s, fx, fy, size, c, bold, maxW) => {
+    ctx.fillStyle = c;
+    ctx.font = `${bold ? 'bold ' : ''}${size * h}px ${FONT}`;
+    ctx.fillText(s, x + fx * h, y + fy * h, maxW * h);
+  };
+  const big = h >= 16;
+  ctx.textBaseline = 'top';
+  if (big) text(n.room || '', 0.13, 0.05, 0.09, '#555', false, w / h - 0.6);
+  else bar(0.13, 0.07, 0.3, 0.06, '#888');               // 맨 위 작은 방 이름
+  bar(w / h - 0.35, 0.07, 0.08, 0.06, '#ccc');           // 종 아이콘
+  bar(w / h - 0.14, 0.07, 0.07, 0.06, '#aaa');           // 닫기
+  ctx.fillStyle = n.avatarColor || '#9fcaf2';            // 프로필(기본 하늘색 원)
+  ctx.beginPath();
+  ctx.arc(x + 0.254 * h, y + 0.34 * h, 0.145 * h, 0, 7);
+  ctx.fill();
+  if (big) {
+    text(n.name || '', 0.49, 0.25, 0.11, '#222', true, w / h - 0.6);
+    text(n.message || '', 0.49, 0.40, 0.09, '#666', false, w / h - 0.6);
+  } else {
+    bar(0.49, 0.28, 0.28, 0.07, '#222');                 // 이름
+    bar(0.49, 0.43, 0.2, 0.05, '#888');                  // 메시지
+  }
+  bar(0, 0.63, w / h, 0.01, '#ddd');                     // 구분선
+  bar(w / h - 0.45, 0.71, 0.4, 0.2, '#eee');             // 전송 버튼
+  if (big) {
+    text(config.inputPlaceholder, 0.135, 0.76, 0.09, '#aaa', false, w / h - 0.7);
+    ctx.textAlign = 'center';
+    text(config.sendLabel, w / h - 0.25, 0.76, 0.09, '#aaa', false, 0.38);
+    ctx.textAlign = 'left';
+  } else bar(0.135, 0.79, 0.4, 0.05, '#bbb');            // "메시지 입력"
+  bar(0, 0.985, w / h, 0.015, '#9a9a9a');                // 카드 아래 경계
+  ctx.fillStyle = '#c8c8c8';                             // 카드 오른쪽 경계 (가로로 붙은 카드 구분)
+  ctx.fillRect(x + w - 1, y, 1, h);
+}
+
+function frame(t) {
+  requestAnimationFrame(frame);
+  if (bg.complete && bg.naturalWidth) ctx.drawImage(bg, 0, 0, W, H);
+  else { ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H); }
+  if (hasVideo && !video.videoWidth) return;
+  if (!hasVideo && playing) drawDemo(t);
+  const src = hasVideo ? video : demo;
+
+  // 작업표시줄 위 1920x1024 영역 전체를 카드 격자로 채움 (영상은 늘려서 맞춤)
+  cols = +$('cols').value; $('colsV').textContent = cols;
+  rows = Math.max(1, Math.round(cols * CARD_AR * TASKBAR_TOP / W));
+  if (small.width !== cols || small.height !== rows) { small.width = cols; small.height = rows; }
+  sctx.drawImage(src, 0, 0, cols, rows);
+  const d = sctx.getImageData(0, 0, cols, rows).data;
+  const thr = +$('thr').value; $('thrV').textContent = thr;
+  const inv = $('inv').checked, detail = $('detail').checked;
+
+  const cw = W / cols, ch = TASKBAR_TOP / rows;
+  const gap = 0;   // 실제 알림은 빈틈 없이 붙어서 쌓이고, 카드 테두리 선으로만 구분된다
+  let on = 0;
+  for (let y = 0; y < rows; y++) for (let x = 0; x < cols; x++) {
+    const i = (y * cols + x) * 4;
+    const lum = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+    if ((lum > thr) === inv) continue;
+    on++;
+    const px = x * cw + gap, py = y * ch + gap, w = cw - gap * 2, h = ch - gap * 2;
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(px, py, w, h);
+    const list = config.notifications;
+    if (detail && h >= 8) drawCard(px, py, w, h, list[(y * cols + x) % list.length]);
+  }
+  $('info').textContent = `${cols}×${rows} = 알림 ${(cols * rows).toLocaleString()}개 격자 (켜진 알림 ${on.toLocaleString()}개)`;
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

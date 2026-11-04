@@ -1,0 +1,11 @@
+{
+  "inputPlaceholder": "메시지 입력",
+  "sendLabel": "전송",
+  "notifications": [
+    { "room": "김철수", "name": "김철수", "message": "ㅋㅋㅋㅋ" },
+    { "room": "김철수", "name": "김철수", "message": "이거 뭐임" },
+    { "room": "이영희", "name": "이영희", "message": "배드애플 재생해야지" },
+    { "room": "박민수", "name": "박민수", "message": "정말쓸모없지" },
+    { "room": "동아리 단톡방", "name": "회장", "message": "이번주 모임 공지", "avatarColor": "#f2b8a0" }
+  ]
+}
